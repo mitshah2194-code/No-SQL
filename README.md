@@ -573,3 +573,138 @@ In your Azure Portal (or via C# code during container creation), your **Indexing
 2.  **Distance Units:** The `Distance()` function always operates in **meters**.
 3.  **Partitioning:** If your app grows globally, you might use a `City` or `Region` as a partition key. In the `FindNearbyDriversAsync` method, you would pass that `PartitionKey` to the query options to ensure it only searches one regional shard, making the search even faster.
 
+For a Senior Developer or Lead role, interviewers want to see that you understand the **trade-offs** of NoSQL. It’s not just about knowing how to write a query; it’s about knowing *why* you chose NoSQL over a Relational database (RDBMS).
+
+Here are the most common and challenging NoSQL interview questions, categorized by topic.
+
+---
+
+## 🏗️ Architecture & Theory
+
+### 1. Explain the CAP Theorem. Which two does your preferred NoSQL DB prioritize?
+*   **The Answer:** CAP stands for **Consistency**, **Availability**, and **Partition Tolerance**. In a distributed system, you can only guarantee two.
+*   **The Nuance:** Most NoSQL databases (like Cosmos DB or Cassandra) are **AP** (Availability and Partition Tolerance) or **CP** (Consistency and Partition Tolerance).
+*   **Senior Tip:** Mention that modern databases like Cosmos DB allow you to "tune" this. You can choose "Strong Consistency" (CP) or "Eventual Consistency" (AP) depending on the business requirement.
+
+
+
+### 2. What is "Eventual Consistency"?
+*   **The Answer:** It means that if no new updates are made to a data item, eventually all accesses to that item will return the last updated value.
+*   **The Trade-off:** You get very high availability and low latency, but a user might see slightly "stale" data for a few milliseconds.
+*   **Example:** A "Like" count on a social media post doesn't need to be perfectly accurate every millisecond, making it a great candidate for eventual consistency.
+
+---
+
+## 📑 Data Modeling & Design
+
+### 3. How do you handle "Joins" in NoSQL?
+*   **The Answer:** You don't. Joins are expensive in distributed systems. Instead, you use:
+    *   **Denormalization (Embedding):** Storing related data together in one document.
+    *   **Application-side Joins:** Fetching data from two collections and joining them in your C# code.
+    *   **Materialized Views:** Using a tool like the **Cosmos DB Change Feed** to create a pre-joined version of the data for fast reading.
+
+### 4. What is a "Hot Partition" and how do you prevent it?
+*   **The Answer:** A Hot Partition occurs when your Partition Key is poorly chosen, causing one physical server to handle all the traffic while others are idle.
+*   **Prevention:** Use a high-cardinality key (like `UserId` or `OrderId`) rather than a low-cardinality one (like `Gender` or `Country`).
+*   **Example:** If you partition by `Date`, all of today's traffic hits one server. Partitioning by `TransactionID` spreads that traffic evenly.
+
+
+
+---
+
+## ⚡ Performance & Scalability
+
+### 5. When would you choose NoSQL over a Relational Database (SQL Server)?
+*   **Use NoSQL when:**
+    *   You have **massive volumes** of data (Terabytes/Petabytes).
+    *   You need **horizontal scaling** (adding more servers).
+    *   Your data is **unstructured or semi-structured** (JSON).
+    *   You need **rapid development** without strict schema migrations.
+
+### 6. What are Request Units (RUs) in the context of Azure Cosmos DB?
+*   **The Answer:** RUs are the "currency" of Cosmos DB. They abstract the CPU, IOPS, and memory required to perform an operation.
+*   **The Cost:** A 1KB "Point Read" (reading by ID and Partition Key) costs 1 RU. Writing that same document costs more. A "Cross-Partition Query" can cost hundreds of RUs.
+
+---
+
+## 🛠️ Advanced & Scenario-Based
+
+### 7. How do you implement "Transactions" in NoSQL?
+*   **The Answer:** Most NoSQL DBs don't support multi-document transactions like SQL. However:
+    *   **Atomicity:** Changes to a single document are atomic.
+    *   **Stored Procedures:** In Cosmos DB, you can write JavaScript stored procedures that run transactionally within a **single logical partition**.
+    *   **Saga Pattern:** For distributed transactions across different services, you use the Saga pattern with a Message Broker (like Service Bus).
+
+### 8. Explain the "Change Feed" pattern.
+*   **The Answer:** It's a listenable stream of changes to your database.
+*   **Use Case:** If a user updates their profile in Cosmos DB, the Change Feed triggers an **Azure Function** to:
+    1. Update the Search Index.
+    2. Send a "Welcome" email.
+    3. Push data to a Data Lake for analytics.
+
+---
+
+### 💡 Pro-Interview Tip: The "Why"
+Whenever you answer a NoSQL question, always mention **Cost** and **Latency**. 
+*   "We choose this partition key to **reduce RU cost**."
+*   "We embed this data to **minimize network latency**."
+
+This shows the interviewer you aren't just a coder, but an **Architect** who cares about the production environment.
+
+The **Serverless vs. Provisioned Throughput** debate is one of the most common "Senior Architect" questions because it directly impacts the company's monthly Azure bill.
+
+In Cosmos DB, you don't just pay for storage; you pay for **Request Units (RU/s)**. Here is how the two models compare and how to decide between them.
+
+---
+
+## 💰 The Two Pricing Models
+
+### 1. Provisioned Throughput (Standard)
+You "reserve" a specific amount of capacity (e.g., 400 RU/s). You pay for that capacity every hour, whether you use it or not.
+*   **Best for:** Steady, predictable traffic.
+*   **Autoscale Option:** You can set a range (e.g., 400 to 4,000 RU/s). Azure will automatically scale up when traffic hits and scale down when it's quiet, but you still pay a minimum "base" fee.
+
+### 2. Serverless
+There is no "reservation." You are only billed for the exact number of RUs your operations consume. If your app has zero users at 3 AM, your cost is **zero** for that time.
+*   **Best for:** Development, testing, small-scale apps, or apps with "bursty" and unpredictable traffic.
+*   **Limitations:** It cannot scale as high as Provisioned, and it lacks some advanced features like the "Integrated Cache."
+
+---
+
+## 🚦 Decision Matrix for a Cab App
+Since you are architecting a cab booking platform, your traffic likely looks like a "Wave" (peaks during morning/evening commutes and dips at night).
+
+| Scenario | Recommended Model | Reason |
+| :--- | :--- | :--- |
+| **Development & MVP** | **Serverless** | You don't want to pay \$25/month for a database that only you and a few testers are using. |
+| **High-Traffic Production** | **Provisioned (Autoscale)** | Once you have thousands of drivers sending GPS updates, Provisioned is actually cheaper per-request than Serverless. |
+| **Analytical Queries** | **Provisioned** | Large "Select" queries for monthly reports consume many RUs; Provisioned ensures you don't hit a "ceiling" and fail. |
+
+
+
+---
+
+## 📝 Practice Interview Question: Cost Optimization
+
+**Interviewer:** *"Our Cosmos DB bill is unexpectedly high. What are the first three things you would investigate as a Senior Developer?"*
+
+**Your Answer:**
+1.  **Check for Cross-Partition Queries:** I would use the **Query Metrics** to find queries without a Partition Key. These are "expensive" because they hit every physical shard.
+2.  **Evaluate Throughput Model:** I would check if we are using "Provisioned" for a low-traffic environment. If our usage is below 10% of our provisioned limit, I’d suggest switching to **Serverless**.
+3.  **Review Indexing Policy:** By default, Cosmos DB indexes *every* property. For a write-heavy cab app, I would exclude properties we never query (like `Notes` or `Description`) from the index to save "Write RUs."
+
+---
+
+## 💻 C# Tip: Measuring RU Consumption
+In your C# code, you can actually see exactly what each call is costing you. This is great for debugging "expensive" code:
+
+```csharp
+var response = await container.CreateItemAsync(myTrip, new PartitionKey(myTrip.DriverId));
+
+// This is the "Magic Number" for cost optimization
+double requestCharge = response.RequestCharge; 
+
+Console.WriteLine($"This write cost: {requestCharge} RUs");
+```
+
+Would you like to move on to **CAP Theorem** details, or perhaps a mock **System Design** walk-through for your Cab Platform?
