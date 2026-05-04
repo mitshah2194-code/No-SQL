@@ -271,3 +271,305 @@ Preparing for a NoSQL interview requires a solid grasp of how these databases di
 | **Polyglot Persistence** | Using different types of databases (SQL, NoSQL, Graph) for different parts of one app. |
 
 Since you have an interview coming up for a Senior Manager or Senior Developer role, they might ask about **cost optimization**. Would you like to dive into how to save money on Cosmos DB using **Serverless vs. Provisioned Throughput**?
+
+For a Senior Software Engineer with a focus on the .NET ecosystem, Azure Cosmos DB interview questions will typically move beyond basic definitions and into **performance tuning, cost management, and architectural trade-offs.**
+
+Here are the most common and challenging questions you might encounter, organized by "Senior-level" themes.
+
+---
+
+## 🏗️ Architecture & Consistency
+
+### 1. Can you explain the 5 Consistency Levels in Cosmos DB?
+*   **The Question:** Why does Cosmos DB offer more than just "Strong" and "Eventual" consistency?
+*   **The Answer:** It's about the **PACELC theorem** (an extension of CAP).
+    *   **Strong:** Linearizability. You always read the latest write, but latency is high and it’s limited to a single region for writes.
+    *   **Bounded Staleness:** Reads lag behind writes by a specific time interval or number of versions.
+    *   **Session (Most Popular):** Within a single client session, you get strong consistency (read-your-own-writes). For everyone else, it's eventual.
+    *   **Consistent Prefix:** Updates are seen in the order they were written, but there's a lag.
+    *   **Eventual:** Fastest and cheapest, but no guarantee of order or "freshness."
+
+
+### 2. How does the "Global Distribution" and "Multi-Region Writes" feature work?
+*   **Context:** Mention how Cosmos DB allows you to replicate data across any Azure region globally.
+*   **Nuance:** Ask about conflict resolution. If two people update the same document in different regions simultaneously, Cosmos DB uses **Last Write Wins (LWW)** by default, but you can write a custom **Merge Procedure**.
+
+---
+
+## 📑 Data Modeling (The "Make or Break" Category)
+
+### 3. What are the three properties of a "Good" Partition Key?
+*   **The Answer:** 
+    1.  **High Cardinality:** Thousands of unique values (e.g., `UserId`, not `Gender`).
+    2.  **Even Distribution:** Spreads both **Storage** and **Throughput (RU/s)** across physical partitions.
+    3.  **Query Alignment:** The key appears in the `WHERE` clause of your most frequent/expensive queries to avoid "Fan-out" (Cross-partition) queries.
+
+### 4. When should you use a "Synthetic" Partition Key?
+*   **The Scenario:** You have a property like `DeviceID`, but it’s not unique enough, or you need to partition by a combination of fields.
+*   **The Solution:** You concatenate two values into one property (e.g., `DeviceID_Date`) and use that as the Partition Key to ensure a more even spread of data.
+
+---
+
+## ⚡ Performance & RU Optimization
+
+### 5. What are Request Units (RUs), and how do you calculate them?
+*   **The Answer:** RUs are a deterministic measure of CPU, Memory, and IOPS. 1 RU is the cost of a "Point Read" (reading by ID and Partition Key) of a 1KB document.
+*   **Optimization:** Mention that you reduce RUs by:
+    *   Limiting the number of properties indexed (Indexing Policy).
+    *   Avoiding Cross-Partition queries.
+    *   Using "Point Reads" instead of SQL `SELECT` queries where possible.
+
+### 6. Explain the "Change Feed" and its common use cases.
+*   **The Concept:** A persistent record of changes to a container.
+*   **The .NET Context:** Usually used with **Azure Functions** (Cosmos DB Trigger).
+*   **Use Cases:** 
+    *   **Materialized Views:** Syncing data to another container with a different partition key.
+    *   **Data Lake:** Moving data to Synapse for analytics.
+    *   **Microservices:** Triggering a notification or email service when an order status changes.
+
+
+---
+
+## 🛠️ Implementation & SDK Questions
+
+### 7. What is the difference between `ReadItemAsync` and a SQL Query in the .NET SDK?
+*   **Critical distinction:** 
+    *   `ReadItemAsync` is a **Point Read**. It requires the ID and Partition Key. It is the cheapest (1 RU) and fastest way to get data.
+    *   `Query` (using `GetItemQueryIterator`) involves the query engine, which costs more RUs, even if it only returns one document.
+
+### 8. How do you handle "Rate Limiting" (429 Errors)?
+*   **The Answer:** First, the .NET SDK has **built-in retry logic**. You can configure `MaxRetryAttemptsOnRateLimitedRequests`.
+*   **Architectural fix:** If you see too many 429s, you either need to **scale your RU/s**, implement **Autoscale**, or fix a **Hot Partition**.
+
+---
+
+## 🏁 Senior/Managerial Scenario
+**"We are seeing high costs but low performance on our 'Trips' container. Walk me through your debugging steps."**
+
+1.  **Audit Queries:** Use the **Query Metrics** to find high-RU queries. Are they cross-partition?
+2.  **Check Indexing:** Are we indexing large strings or arrays that we never search for? (Write-heavy optimization).
+3.  **Monitor Throttling:** Are we hitting 429s? Is the traffic concentrated on one Partition Key (Hot Partition)?
+4.  **Evaluate Throughput:** Are we using **Manual Throughput** for a "spiky" workload? If so, I would recommend switching to **Autoscale** to save costs during idle periods.
+
+Are you looking for more details on a specific API, like the **NoSQL API** versus the **MongoDB API**?
+
+Since you're working on a **cab booking platform**, let's look at a production-ready C# example that covers the three most critical scenarios: **creating a trip**, **performing a high-efficiency point read**, and **handling concurrency** to prevent two drivers from accepting the same ride.
+
+This uses the latest `Microsoft.Azure.Cosmos` library (v3).
+
+### 1. The Trip Model
+Note the use of `JsonProperty` to map C# naming conventions to the required Cosmos DB `id` and your chosen partition key.
+
+```csharp
+using Newtonsoft.Json;
+
+public class Trip
+{
+    [JsonProperty("id")]
+    public string Id { get; set; } // The Unique Trip ID
+
+    [JsonProperty("partitionKey")] 
+    public string DriverId { get; set; } // Using DriverId as Partition Key
+
+    public string PassengerName { get; set; }
+    public string Status { get; set; } // Requested, Accepted, Completed
+    
+    [JsonProperty("_etag")]
+    public string ETag { get; set; } // For Optimistic Concurrency
+}
+```
+
+---
+
+### 2. The Implementation (Service Layer)
+This example demonstrates how to interact with the container using best practices for performance and safety.
+
+
+
+```csharp
+using Microsoft.Azure.Cosmos;
+
+public class TripService
+{
+    private readonly Container _container;
+
+    public TripService(CosmosClient client)
+    {
+        // Reference the database and container
+        _container = client.GetContainer("CabPlatformDb", "Trips");
+    }
+
+    // WRITE: Create a new Trip
+    public async Task CreateTripAsync(Trip trip)
+    {
+        // Always pass the partition key for efficiency
+        await _container.CreateItemAsync(trip, new PartitionKey(trip.DriverId));
+    }
+
+    // READ: The "Point Read" (Cheapest & Fastest - 1 RU)
+    public async Task<Trip> GetTripAsync(string tripId, string driverId)
+    {
+        try
+        {
+            ItemResponse<Trip> response = await _container.ReadItemAsync<Trip>(
+                id: tripId, 
+                partitionKey: new PartitionKey(driverId)
+            );
+            return response.Resource;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    // UPDATE: With Optimistic Concurrency (Preventing Race Conditions)
+    public async Task<bool> AcceptTripAsync(Trip trip)
+    {
+        try
+        {
+            trip.Status = "Accepted";
+
+            // Pass RequestOptions with the ETag. 
+            // If another driver accepted first, the ETag won't match, and this will fail.
+            ItemRequestOptions requestOptions = new ItemRequestOptions { 
+                IfMatchEtag = trip.ETag 
+            };
+
+            await _container.ReplaceItemAsync(
+                trip, 
+                trip.Id, 
+                new PartitionKey(trip.DriverId), 
+                requestOptions
+            );
+            
+            return true;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.PreconditionFailed)
+        {
+            // Conflict detected: Another driver updated this record first
+            return false;
+        }
+    }
+}
+```
+
+---
+
+### 3. Dependency Injection Setup
+In your `Program.cs` (ASP.NET Core), you should register the `CosmosClient` as a **Singleton**. Creating a new client for every request is a common mistake that destroys performance.
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+// Register CosmosClient as a Singleton
+builder.Services.AddSingleton((s) => {
+    string connectionString = builder.Configuration["CosmosDb:ConnectionString"];
+    return new CosmosClient(connectionString, new CosmosClientOptions() {
+        SerializerOptions = new CosmosSerializationOptions() {
+            PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
+        }
+    });
+});
+
+builder.Services.AddScoped<TripService>();
+```
+
+### Key Highlights for your Architecture:
+*   **Point Reads:** Notice `GetTripAsync` uses the ID and Partition Key. This hits the exact physical shard and costs the minimum amount of RUs.
+*   **Concurrency:** The `IfMatchEtag` logic in `AcceptTripAsync` is the "secret sauce" for a cab app. It ensures that the database itself handles the locking logic so your API stays stateless.
+*   **Performance:** By setting the naming policy to `CamelCase` in the client options, you can keep your C# properties capitalized (`DriverId`) while keeping your JSON standard (`driverId`).
+
+To implement a **Geospatial query** in C#, you will use the `Microsoft.Azure.Cosmos.Spatial` namespace. This allows you to find drivers within a specific radius of a passenger using highly optimized spatial indexes.
+
+For your cab booking platform, this is the most efficient way to perform "search for nearby drivers" logic.
+
+### 1. Updated Model with GeoJSON
+First, ensure your model uses the `Point` class from the Cosmos SDK. 
+
+```csharp
+using Microsoft.Azure.Cosmos.Spatial;
+using Newtonsoft.Json;
+
+public class DriverLocation
+{
+    [JsonProperty("id")]
+    public string DriverId { get; set; }
+
+    [JsonProperty("partitionKey")]
+    public string City { get; set; } // Partitioning by city is common for regional searches
+
+    public string Status { get; set; } // "Available", "Busy"
+
+    [JsonProperty("currentLocation")]
+    public Point CurrentLocation { get; set; } // GeoJSON Point [Longitude, Latitude]
+}
+```
+
+---
+
+### 2. The Proximity Search Logic
+This method calculates the distance on the server side and returns only the drivers within the requested meter radius.
+
+```csharp
+public async Task<List<DriverLocation>> FindNearbyDriversAsync(double longitude, double latitude, int radiusMeters)
+{
+    var drivers = new List<DriverLocation>();
+    
+    // 1. Define the passenger's center point
+    Point passengerLocation = new Point(longitude, latitude);
+
+    // 2. Create the LINQ queryable
+    // The .Distance() method is translated into a spatial SQL query by the SDK
+    using FeedIterator<DriverLocation> feedIterator = _container.GetItemLinqQueryable<DriverLocation>()
+        .Where(d => d.Status == "Available" && 
+                    d.CurrentLocation.Distance(passengerLocation) <= radiusMeters)
+        .ToFeedIterator();
+
+    // 3. Execute and collect results
+    while (feedIterator.HasMoreResults)
+    {
+        FeedResponse<DriverLocation> response = await feedIterator.ReadNextAsync();
+        drivers.AddRange(response);
+    }
+
+    return drivers;
+}
+```
+
+---
+
+### 3. The "Under the Hood" SQL
+When you run that C# code, the Cosmos SDK translates it into a specialized SQL query that looks like this:
+
+```sql
+SELECT * FROM c 
+WHERE c.status = 'Available' 
+AND ST_DISTANCE(c.currentLocation, {"type": "Point", "coordinates": [72.92, 22.56]}) <= 2000
+```
+
+---
+
+### 🛠️ Critical Setup: The Indexing Policy
+A spatial query will be extremely slow and expensive (high RU cost) unless you tell Cosmos DB to index the location property specifically for spatial data. 
+
+In your Azure Portal (or via C# code during container creation), your **Indexing Policy** must look like this:
+
+```json
+{
+    "indexingMode": "consistent",
+    "includedPaths": [ { "path": "/*" } ],
+    "spatialIndexes": [
+        {
+            "path": "/currentLocation/?",
+            "types": [ "Point" ]
+        }
+    ]
+}
+```
+
+### 💡 Pro-Tips for a Senior Architect:
+1.  **Coordinate Order:** Always remember that GeoJSON (and Cosmos DB) uses **[Longitude, Latitude]**. Reversing these is the #1 cause of "empty results" bugs.
+2.  **Distance Units:** The `Distance()` function always operates in **meters**.
+3.  **Partitioning:** If your app grows globally, you might use a `City` or `Region` as a partition key. In the `FindNearbyDriversAsync` method, you would pass that `PartitionKey` to the query options to ensure it only searches one regional shard, making the search even faster.
+
