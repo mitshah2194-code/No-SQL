@@ -205,3 +205,69 @@ var friends = await g.V().Has("name", "Mit").Out("knows").Values<string>("name")
 | **Graph** | **Fraud/Referrals** | Finding if the same passenger is using 5 different "referral" accounts. |
 
 For your freelance project, starting with the **Document Model** is almost always the best move, as it covers 90% of business needs.
+
+Preparing for a NoSQL interview requires a solid grasp of how these databases differ from traditional RDBMS, especially regarding scaling and data modeling. Since you are working with **Azure Cosmos DB** and **.NET**, you should be ready for questions that bridge theoretical concepts with practical implementation.
+
+---
+
+## 🏗️ Core Concepts & Architecture
+
+### 1. What is the CAP Theorem, and how does it apply to NoSQL?
+*   **The Concept:** CAP stands for **Consistency**, **Availability**, and **Partition Tolerance**. The theorem states that a distributed system can only provide two out of these three guarantees at the same time.
+*   **The Nuance:** In NoSQL, since we must have Partition Tolerance (to scale horizontally), we usually choose between Consistency (CP) and Availability (AP).
+*   **Cosmos DB Context:** Be prepared to mention that Cosmos DB offers five consistency levels (Strong, Bounded Staleness, Session, Consistent Prefix, and Eventual) to allow developers to "tune" where they sit on the CAP spectrum.
+
+
+
+### 2. Explain the difference between Horizontal and Vertical Scaling.
+*   **Vertical (Scale Up):** Adding more power (CPU, RAM) to a single server. It has a physical limit and causes downtime.
+*   **Horizontal (Scale Out):** Adding more servers to a cluster. NoSQL is designed for this, allowing for nearly infinite growth by sharding data across multiple "nodes."
+
+---
+
+## 📄 Data Modeling & Design
+
+### 3. What is "Sharding" or "Partitioning," and why is the Partition Key choice so important?
+*   **Sharding:** The process of breaking up a large dataset into smaller chunks (shards) stored across different servers.
+*   **Partition Key:** The property used to determine which shard a piece of data goes to.
+*   **Interview Tip:** Explain that a "Good" partition key has high cardinality (many unique values) and avoids "Hot Partitions" (where one server does all the work while others are idle).
+
+### 4. When should you Embed data vs. Reference data in NoSQL?
+*   **Embedding (Denormalization):** Storing related data in a single document. Best for "one-to-few" relationships or data that is read together and rarely changes.
+*   **Referencing (Normalization):** Storing an ID to a record in another collection. Best for "one-to-many" or "many-to-many" relationships where the related data changes frequently (e.g., a user's wallet balance).
+
+---
+
+## ⚡ Performance & Operations
+
+### 5. What is a "Cross-Partition Query," and why should you avoid it?
+*   **The Problem:** A query that doesn't include the Partition Key in the `WHERE` clause.
+*   **The Impact:** The database has to "fan out" the query to every single physical partition, which is expensive in terms of RUs (Request Units) and increases latency.
+
+### 6. How do you handle Concurrency in NoSQL without Transactions?
+*   **Optimistic Concurrency:** Most NoSQL DBs (like Cosmos DB) use **ETags**. When you update a record, you send the ETag you last saw. If the ETag in the database is different, it means someone else updated it first, and the write fails.
+*   **Atomic Operations:** Mention that while NoSQL lacks cross-table transactions, many support atomic operations within a single logical partition (e.g., Stored Procedures in Cosmos DB).
+
+---
+
+## 🛠️ Specialized Questions (Scenario-Based)
+
+### 7. Scenario: "You are building a Cab Booking app. How would you store real-time GPS coordinates?"
+*   **Answer:** I would use a **Document model** with **GeoJSON** support. I would use the `driverId` as the Partition Key to ensure all updates for one driver go to the same shard. I would also set a **TTL (Time to Live)** so that old coordinates expire automatically to save storage costs.
+
+### 8. What is the "Change Feed" in Cosmos DB?
+*   **The Concept:** A persistent record of changes (inserts and updates) to a container in the order they occurred.
+*   **Use Case:** Mention it’s perfect for triggering **Azure Functions** to sync data, send notifications, or update a second "Materialized View" partitioned by a different key.
+
+---
+
+### 💡 Quick Summary Table for Review
+
+| Concept | Key Phrase to Remember |
+| :--- | :--- |
+| **Base** | Basically Available, Soft state, Eventual consistency (The NoSQL equivalent of ACID). |
+| **Schema-less** | Flexibility to store different structures in the same collection. |
+| **Request Units (RU)** | The "currency" of Cosmos DB performance (CPU + Memory + IO). |
+| **Polyglot Persistence** | Using different types of databases (SQL, NoSQL, Graph) for different parts of one app. |
+
+Since you have an interview coming up for a Senior Manager or Senior Developer role, they might ask about **cost optimization**. Would you like to dive into how to save money on Cosmos DB using **Serverless vs. Provisioned Throughput**?
